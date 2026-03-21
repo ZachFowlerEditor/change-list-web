@@ -3,8 +3,10 @@ import { analyzeXmls, convertMarkersToResult, exportCsvFiltered } from "./lib/an
 import { csvToTsv } from "./lib/csvGenerator";
 import type { AnalysisResult } from "./lib/analyze";
 import type { CsvRow } from "./lib/csvGenerator";
+import { loadAnalytics, saveAnalyticsEntry, updateAnalyticsField, deleteAnalyticsEntry } from "./lib/supabase";
 
 interface ReelStats {
+  id?: string;
   reel_name: string;
   project_name: string;
   version: string;
@@ -97,10 +99,18 @@ function AnalyticsPanel({
     (updated[idx] as any)[field] = value;
     onUpdate(updated);
     try { localStorage.setItem("clt_analytics", JSON.stringify(updated)); } catch {}
+    const entry = updated[idx];
+    if (entry.id) {
+      updateAnalyticsField(entry.id, field, value).catch(() => {});
+    }
   };
 
   const confirmDelete = () => {
     if (pendingDelete === null) return;
+    const entry = analytics[pendingDelete];
+    if (entry?.id) {
+      deleteAnalyticsEntry(entry.id).catch(() => {});
+    }
     const updated = analytics.filter((_, i) => i !== pendingDelete);
     onUpdate(updated);
     try { localStorage.setItem("clt_analytics", JSON.stringify(updated)); } catch {}
@@ -424,12 +434,24 @@ function App() {
   useEffect(() => { localStorage.setItem("clt_reelName", reelName); }, [reelName]);
   useEffect(() => { localStorage.setItem("clt_mode", mode); }, [mode]);
 
-  // Restore analytics from localStorage
+  // Load analytics from Supabase (falls back to localStorage)
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("clt_analytics");
-      if (saved) setAnalytics(JSON.parse(saved));
-    } catch {}
+    loadAnalytics().then((rows) => {
+      if (rows.length > 0) {
+        setAnalytics(rows);
+        try { localStorage.setItem("clt_analytics", JSON.stringify(rows)); } catch {}
+      } else {
+        try {
+          const saved = localStorage.getItem("clt_analytics");
+          if (saved) setAnalytics(JSON.parse(saved));
+        } catch {}
+      }
+    }).catch(() => {
+      try {
+        const saved = localStorage.getItem("clt_analytics");
+        if (saved) setAnalytics(JSON.parse(saved));
+      } catch {}
+    });
   }, []);
 
   const detectReel = (name: string) => {
@@ -509,11 +531,14 @@ function App() {
       setStatus("");
 
       // Save to analytics
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const ts = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
       const entry: ReelStats = {
         reel_name: reelName || "Reel 1",
         project_name: projectName || "",
         version: versionDate || "",
-        last_converted: new Date().toISOString().slice(0, 10),
+        last_converted: ts,
         before_file: beforeFile.name,
         after_file: afterFile.name,
         before_clips: res.before_clip_count,
@@ -529,8 +554,15 @@ function App() {
         net_delta_frames: res.net_trt_frames,
         net_delta_tc: res.net_trt_tc,
       };
+      const saved = await saveAnalyticsEntry(entry);
       setAnalytics((prev) => {
-        const updated = [...prev, entry];
+        // Replace existing entry with same dedup key or append
+        const idx = prev.findIndex(
+          (e) => e.reel_name === entry.reel_name && e.before_file === entry.before_file && e.after_file === entry.after_file
+        );
+        const updated = idx >= 0
+          ? [...prev.slice(0, idx), saved, ...prev.slice(idx + 1)]
+          : [...prev, saved];
         try { localStorage.setItem("clt_analytics", JSON.stringify(updated)); } catch {}
         return updated;
       });
