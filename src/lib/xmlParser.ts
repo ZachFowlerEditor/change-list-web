@@ -152,7 +152,8 @@ function extractSourceFile(clipitem: Element): string {
   const fileNode = findElement(clipitem, "file");
   if (!fileNode) return "";
   const pathurl = getChildText(fileNode, "pathurl");
-  if (pathurl) return pathurl;
+  // Use !== null so an empty <pathurl></pathurl> returns "" (matches Rust behavior)
+  if (pathurl !== null) return pathurl;
   const fname = getChildText(fileNode, "name");
   return fname ?? "";
 }
