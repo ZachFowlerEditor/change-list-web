@@ -5,10 +5,26 @@ const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export const supabase = url && key ? createClient(url, key) : null;
 
+// Sign in anonymously on load so RLS policies can identify the user
+if (supabase) {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (!session) {
+      supabase.auth.signInAnonymously();
+    }
+  });
+}
+
+async function getCurrentUserId(): Promise<string | undefined> {
+  if (!supabase) return undefined;
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id;
+}
+
 export interface ReelStatsRow {
   id?: string;
   created_at?: string;
   updated_at?: string;
+  user_id?: string;
   reel_name: string;
   project_name: string;
   version: string;
@@ -62,7 +78,9 @@ export async function saveAnalyticsEntry(entry: ReelStatsRow): Promise<ReelStats
   }
 
   try {
-    // Check for existing row with same dedup key
+    const userId = await getCurrentUserId();
+
+    // Check for existing row with same dedup key (scoped to current user)
     const { data: existing } = await supabase
       .from(TABLE)
       .select("id")
@@ -74,7 +92,7 @@ export async function saveAnalyticsEntry(entry: ReelStatsRow): Promise<ReelStats
     if (existing?.id) {
       const { data, error } = await supabase
         .from(TABLE)
-        .update({ ...entry, updated_at: new Date().toISOString() })
+        .update({ ...entry, user_id: userId, updated_at: new Date().toISOString() })
         .eq("id", existing.id)
         .select()
         .single();
@@ -83,7 +101,7 @@ export async function saveAnalyticsEntry(entry: ReelStatsRow): Promise<ReelStats
     } else {
       const { data, error } = await supabase
         .from(TABLE)
-        .insert(entry)
+        .insert({ ...entry, user_id: userId })
         .select()
         .single();
       if (error) throw error;
