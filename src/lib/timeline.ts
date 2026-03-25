@@ -108,6 +108,16 @@ export function sceneFromName(name: string): string {
   return normalizeScene(prefix);
 }
 
+/** Premiere Pro ticks per second (254016000000) */
+const TICKS_PER_SEC = 254016000000;
+
+export function ticksPerFrame(timebase: number, ntsc: boolean): number {
+  if (ntsc) {
+    return Math.round(TICKS_PER_SEC * 1001 / (timebase * 1000));
+  }
+  return Math.round(TICKS_PER_SEC / timebase);
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { analyzeXmls, convertMarkersToResult, exportCsvFiltered } from "./lib/analyze";
+import { analyzeXmls, convertMarkersToResult, exportCsvFiltered, buildConformXml } from "./lib/analyze";
 import { csvToTsv } from "./lib/csvGenerator";
 import type { AnalysisResult } from "./lib/analyze";
 import type { CsvRow } from "./lib/csvGenerator";
@@ -423,6 +423,11 @@ function App() {
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
 
+  const [beforeRefPath, setBeforeRefPath] = useState(() => localStorage.getItem("clt_beforeRefPath") || "");
+  const [beforeRefAudioPath, setBeforeRefAudioPath] = useState(() => localStorage.getItem("clt_beforeRefAudioPath") || "");
+  const [afterRefPath, setAfterRefPath] = useState(() => localStorage.getItem("clt_afterRefPath") || "");
+  const [afterRefAudioPath, setAfterRefAudioPath] = useState(() => localStorage.getItem("clt_afterRefAudioPath") || "");
+
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [analytics, setAnalytics] = useState<ReelStats[]>([]);
 
@@ -433,6 +438,10 @@ function App() {
   useEffect(() => { localStorage.setItem("clt_versionDate", versionDate); }, [versionDate]);
   useEffect(() => { localStorage.setItem("clt_reelName", reelName); }, [reelName]);
   useEffect(() => { localStorage.setItem("clt_mode", mode); }, [mode]);
+  useEffect(() => { localStorage.setItem("clt_beforeRefPath", beforeRefPath); }, [beforeRefPath]);
+  useEffect(() => { localStorage.setItem("clt_beforeRefAudioPath", beforeRefAudioPath); }, [beforeRefAudioPath]);
+  useEffect(() => { localStorage.setItem("clt_afterRefPath", afterRefPath); }, [afterRefPath]);
+  useEffect(() => { localStorage.setItem("clt_afterRefAudioPath", afterRefAudioPath); }, [afterRefAudioPath]);
 
   // Load analytics from Supabase (falls back to localStorage)
   useEffect(() => {
@@ -617,6 +626,24 @@ function App() {
     }
   };
 
+  const generateConform = () => {
+    if (!result) return;
+    try {
+      const xml = buildConformXml({
+        result,
+        beforeRefPath,
+        beforeRefAudioPath,
+        afterRefPath,
+        afterRefAudioPath,
+        sequenceName: `${projectName || "Change List"}_Conform`,
+      });
+      const filename = `${projectName || "change_list"}_${versionDate || "conform"}_conform.xml`;
+      downloadFile(xml, filename, "application/xml");
+    } catch (e: any) {
+      setError(String(e));
+    }
+  };
+
   const deltaClass = (delta: string) => {
     if (delta.startsWith("+")) return "delta-pos";
     if (delta.startsWith("-")) return "delta-neg";
@@ -686,6 +713,9 @@ function App() {
             <button onClick={copyCsvToClipboard} title="Copy as tab-separated values for Google Sheets">
               {copied ? "Copied!" : "Copy TSV"}
             </button>
+            <button onClick={generateConform} title="Generate a conform XML for Premiere Pro with before/after reference overlays">
+              Generate Conform XML
+            </button>
           </>
         )}
 
@@ -712,6 +742,42 @@ function App() {
             <option key={n} value={`Reel ${n}`}>Reel {n}</option>
           ))}
         </select>
+      </div>
+
+      {/* REF path rows for conform XML */}
+      <div className="controls config-row">
+        <label style={{ minWidth: 48 }}>Before</label>
+        <input
+          placeholder="Video REF path"
+          value={beforeRefPath}
+          onChange={(e) => setBeforeRefPath(e.target.value)}
+          style={{ flex: 1 }}
+          title="Before timeline reference render (video) — full file path"
+        />
+        <input
+          placeholder="Audio REF path"
+          value={beforeRefAudioPath}
+          onChange={(e) => setBeforeRefAudioPath(e.target.value)}
+          style={{ flex: 1 }}
+          title="Before timeline reference render (audio) — full file path"
+        />
+      </div>
+      <div className="controls config-row">
+        <label style={{ minWidth: 48 }}>After</label>
+        <input
+          placeholder="Video REF path"
+          value={afterRefPath}
+          onChange={(e) => setAfterRefPath(e.target.value)}
+          style={{ flex: 1 }}
+          title="After timeline reference render (video) — full file path"
+        />
+        <input
+          placeholder="Audio REF path"
+          value={afterRefAudioPath}
+          onChange={(e) => setAfterRefAudioPath(e.target.value)}
+          style={{ flex: 1 }}
+          title="After timeline reference render (audio) — full file path"
+        />
       </div>
 
       {error && (

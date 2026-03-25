@@ -2,9 +2,12 @@
 
 import { parseFcpXml } from "./xmlParser";
 import { detectChanges, groupChanges, computeAnalysisStats, DEFAULT_LEADER_FRAMES } from "./changeDetector";
+import type { Change } from "./changeDetector";
 import { generateRows, writeCsv, type CsvConfig, type CsvRow, type OutputMode } from "./csvGenerator";
 import { markersToCsv } from "./markerConverter";
 import { framesToTimecode, framesToDeltaTimecode } from "./timeline";
+import type { Timeline } from "./timeline";
+import { generateConformXml, type ConformConfig } from "./conformGenerator";
 
 export interface AnalysisStats {
   trims: number;
@@ -32,6 +35,10 @@ export interface AnalysisResult {
   net_trt_frames: number;
   net_trt_tc: string;
   stats: AnalysisStats;
+  /** Parsed timelines and changes for conform generation */
+  _before?: Timeline;
+  _after?: Timeline;
+  _changes?: Change[];
 }
 
 export function analyzeXmls(params: {
@@ -89,6 +96,9 @@ export function analyzeXmls(params: {
     net_trt_frames,
     net_trt_tc: framesToDeltaTimecode(net_trt_frames),
     stats,
+    _before: before,
+    _after: after,
+    _changes: changes,
   };
 }
 
@@ -140,6 +150,38 @@ export function exportCsvFiltered(params: {
     mode: modeStr === "individual" ? "individual" : modeStr === "grouped" ? "grouped" : "both",
   };
   return writeCsv(params.rows, csvConfig);
+}
+
+export function buildConformXml(params: {
+  result: AnalysisResult;
+  beforeRefPath: string;
+  beforeRefAudioPath: string;
+  afterRefPath: string;
+  afterRefAudioPath: string;
+  sequenceName: string;
+}): string {
+  const { result } = params;
+  if (!result._before || !result._after || !result._changes) {
+    throw new Error("Analysis result missing timeline data — re-run analysis first");
+  }
+
+  const toUrl = (p: string, fallback: string) =>
+    p ? `file://localhost${p.replace(/ /g, "%20")}` : `file://localhost/${fallback}`;
+
+  const config: ConformConfig = {
+    beforeRefPathurl: toUrl(params.beforeRefPath, "Before_Timeline_REF.mov"),
+    beforeRefAudioPathurl: toUrl(params.beforeRefAudioPath, "Before_Timeline_REF_Audio.wav"),
+    beforeRefDuration: result.before_duration_frames,
+    afterRefPathurl: toUrl(params.afterRefPath, "After_Timeline_REF.mov"),
+    afterRefAudioPathurl: toUrl(params.afterRefAudioPath, "After_Timeline_REF_Audio.wav"),
+    afterRefDuration: result.after_duration_frames,
+    opacity: 55,
+    sequenceName: params.sequenceName,
+    leaderFrames: 192,
+    trackFilter: [],
+  };
+
+  return generateConformXml(result._before, result._after, result._changes, config);
 }
 
 function todayDate(): string {
