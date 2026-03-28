@@ -816,6 +816,7 @@ function App() {
             <thead>
               <tr>
                 <th style={{ width: 30 }}></th>
+                <th style={{ width: 36 }}>#</th>
                 <th style={{ width: 80 }}>Scene</th>
                 <th style={{ width: 120 }}>Timecode</th>
                 <th>Description</th>
@@ -833,6 +834,7 @@ function App() {
                     <td>
                       <button className="toggle-btn delete-btn" onClick={() => deleteRow(row.row_id)} title="Remove row">✕</button>
                     </td>
+                    <td style={{ color: "var(--text-dim)", fontSize: 11, textAlign: "center", fontFamily: "var(--font-mono)" }}>{row.counter}</td>
                     <EditableCell value={row.scene} className="scene" onChange={(v) => updateRowField(row.row_id, "scene", v)} />
                     <EditableCell value={row.timecode} className="tc" mono onChange={(v) => updateRowField(row.row_id, "timecode", v)} />
                     <EditableCell value={row.description} onChange={(v) => updateRowField(row.row_id, "description", v)} />

@@ -32,6 +32,7 @@ interface ConformResult {
 
 interface SequenceMarker {
   frame: number;
+  outFrame: number;
   name: string;
   comment: string;
   color: string;
@@ -256,15 +257,33 @@ function markerColor(change: Change): string {
 }
 
 function buildMarkers(changes: Change[]): SequenceMarker[] {
-  return changes.map(c => {
+  const RANGE_SPREAD_FRAMES = 1; // each stacked marker extends 1 more frame
+
+  const markers: SequenceMarker[] = changes.map((c, i) => {
+    const counter = i + 1;
     const delta = framesToDeltaTimecode(c.delta_frames);
     return {
       frame: c.timecode_frames,
-      name: "",
+      outFrame: -1,
+      name: `#${counter}`,
       comment: `${c.description} | ${delta} | ${c.clip_name}`,
       color: markerColor(c),
     };
   });
+
+  // For markers at the same timecode, make them range markers so they fan out
+  // visually on the timeline. The first stays a point marker; each subsequent
+  // one gets a progressively longer range.
+  const frameGroups = new Map<number, number>();
+  for (const m of markers) {
+    const count = frameGroups.get(m.frame) ?? 0;
+    if (count > 0) {
+      m.outFrame = m.frame + count * RANGE_SPREAD_FRAMES;
+    }
+    frameGroups.set(m.frame, count + 1);
+  }
+
+  return markers;
 }
 
 // ---------------------------------------------------------------------------
@@ -686,7 +705,7 @@ function renderConformXml(
     o += `\t\t\t<comment>${escapeXml(marker.comment)}</comment>\n`;
     o += `\t\t\t<name>${escapeXml(marker.name)}</name>\n`;
     o += `\t\t\t<in>${marker.frame}</in>\n`;
-    o += `\t\t\t<out>-1</out>\n`;
+    o += `\t\t\t<out>${marker.outFrame}</out>\n`;
     o += `\t\t\t<pproColor>${marker.color}</pproColor>\n`;
     o += `\t\t</marker>\n`;
   }

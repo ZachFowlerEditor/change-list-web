@@ -56,11 +56,16 @@ export function markersToCsv(
       timebase,
     );
 
+    // Parse counter from marker name (e.g. "#3") if present; user-added markers get 0
+    const counterMatch = marker.name.match(/^#(\d+)$/);
+    const counter = counterMatch ? parseInt(counterMatch[1], 10) : 0;
+
     const sceneDisplay = scene && scene !== lastScene ? (lastScene = scene, scene) : "";
     const tcDisplay = tc !== lastTc ? (lastTc = tc, tc) : "";
     const { confidence, confidence_label } = colorToConfidence(marker.color);
 
     rows.push({
+      counter,
       scene: sceneDisplay,
       timecode: tcDisplay,
       description,

@@ -14,6 +14,7 @@ export interface CsvConfig {
 }
 
 export interface CsvRow {
+  counter: number;
   scene: string;
   timecode: string;
   description: string;
@@ -33,6 +34,7 @@ export function generateRows(
 ): CsvRow[] {
   const rows: CsvRow[] = [];
   let rowId = 0;
+  let counter = 1;
 
   if (config.mode === "individual") {
     let lastScene = "";
@@ -42,6 +44,7 @@ export function generateRows(
       const tc = framesToDisplayTimecode(change.timecode_frames, startTcFrames);
       const tcDisplay = tc !== lastTc ? (lastTc = tc, tc) : "";
       rows.push({
+        counter: counter++,
         scene: sceneDisplay,
         timecode: tcDisplay,
         description: change.description,
@@ -65,6 +68,7 @@ export function generateRows(
           ? Math.round(group.changes.reduce((s, c) => s + confidenceScore(c.confidence), 0) / group.changes.length)
           : 0;
         rows.push({
+          counter: counter++,
           scene: sceneDisplay,
           timecode: tc,
           description: `Sequence re-edited. ${group.total_delta_frames >= 0 ? "Added" : "Removed"} ${framesToTimecode(Math.abs(group.total_delta_frames))} in total`,
@@ -77,6 +81,7 @@ export function generateRows(
         });
         for (const change of group.changes) {
           rows.push({
+            counter: counter++,
             scene: "",
             timecode: "",
             description: change.description,
@@ -92,6 +97,7 @@ export function generateRows(
         let first = true;
         for (const change of group.changes) {
           rows.push({
+            counter: counter++,
             scene: first ? sceneDisplay : "",
             timecode: first ? tc : "",
             description: change.description,
@@ -115,6 +121,7 @@ export function generateRows(
       const tc = framesToDisplayTimecode(change.timecode_frames, startTcFrames);
       const tcDisplay = tc !== lastTc ? (lastTc = tc, tc) : "";
       rows.push({
+        counter: counter++,
         scene: sceneDisplay,
         timecode: tcDisplay,
         description: change.description,
@@ -136,17 +143,18 @@ export function writeCsv(rows: CsvRow[], config: CsvConfig): string {
   lines.push(`"${config.project_name} - Change List`);
   lines.push(`     Version Date: ${config.version_date}",,`);
   lines.push(",,,");
-  lines.push(`Scene,${config.reel_name} TC,Description,+/- Frames,Confidence,Clip`);
-  lines.push(`${config.reel_name},,,,`);
+  lines.push(`#,Scene,${config.reel_name} TC,Description,+/- Frames,Confidence,Clip`);
+  lines.push(`,${config.reel_name},,,,,`);
 
   for (const row of rows) {
+    const num = row.counter;
     const scene = escapeCsv(row.scene);
     const tc = escapeCsv(row.timecode);
     const desc = escapeCsv(row.description);
     const delta = escapeCsv(row.delta);
     const conf = row.confidence > 0 ? `${row.confidence}%` : "";
     const clip = escapeCsv(row.clip_name);
-    lines.push(`${scene},${tc},${desc},${delta},${conf},${clip}`);
+    lines.push(`${num},${scene},${tc},${desc},${delta},${conf},${clip}`);
   }
 
   return lines.join("\n");
