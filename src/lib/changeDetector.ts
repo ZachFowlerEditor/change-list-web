@@ -24,9 +24,10 @@ export type ChangeType =
   | "ShotAdded"
   | "ShotReplaced"
   | "EditPointShifted"
-  | "CameraSwap";
+  | "CameraSwap"
+  | "Slipped";
 
-export function changeTypeDescription(ct: ChangeType, frames: number): string {
+export function changeTypeDescription(ct: ChangeType, frames: number, direction?: string): string {
   const f = Math.abs(frames);
   switch (ct) {
     case "RemovedFromHead": return `Removed ${f}fr from head`;
@@ -40,6 +41,7 @@ export function changeTypeDescription(ct: ChangeType, frames: number): string {
     case "ShotReplaced": return "Shot replaced";
     case "EditPointShifted": return `Edit point shifted by ${f}fr`;
     case "CameraSwap": return "Camera swap (same take, different angle)";
+    case "Slipped": return `Slipped this shot ${f} frames ${direction ?? ""}`.trim();
   }
 }
 
@@ -51,6 +53,12 @@ export interface Change {
   confidence: Confidence;
   change_type: ChangeType;
   clip_name: string;
+  /** @internal source overlap frames between matched before/after clips */
+  _sourceOverlap?: number;
+  /** @internal ordinal index of the clip in the before timeline */
+  _beforeIndex?: number;
+  /** @internal ordinal index of the clip in the after timeline */
+  _afterIndex?: number;
 }
 
 export interface ChangeGroup {
@@ -97,7 +105,15 @@ export function detectChangesWithOptions(before: Timeline, after: Timeline, opts
 
     const bc = beforeClips[m.before_idx];
     const ac = afterClips[m.after_idx];
+    const prevLen = changes.length;
     detectTrimChanges(bc, ac, m.match_quality, changes);
+    // Attach match metadata to newly-created changes
+    const overlap = sourceOverlap(bc, ac);
+    for (let ci = prevLen; ci < changes.length; ci++) {
+      changes[ci]._sourceOverlap = overlap;
+      changes[ci]._beforeIndex = m.before_idx;
+      changes[ci]._afterIndex = m.after_idx;
+    }
   }
 
   // Removed shots
@@ -147,6 +163,8 @@ export function detectChangesWithOptions(before: Timeline, after: Timeline, opts
   changes = dedupIdenticalChanges(changes);
   changes = mergeConsecutiveSameType(changes);
   changes = mergeSameClipTrims(changes);
+  changes = applyDifferentPartPrefix(changes);
+  changes = detectReorders(changes, matches);
 
   return changes;
 }
@@ -450,6 +468,24 @@ function detectTrimChanges(before: Clip, after: Clip, quality: Confidence, chang
   const scene = after.scene ? normalizeScene(after.scene) : sceneFromName(after.name);
 
   const headDelta = before.source_in - after.source_in;
+  const tailDelta = after.source_out - before.source_out;
+
+  // Slip: both ends shift by the same amount, duration unchanged
+  if (headDelta !== 0 && tailDelta !== 0 && headDelta + tailDelta === 0) {
+    const direction = headDelta > 0 ? "earlier" : "later";
+    const frames = Math.abs(headDelta);
+    changes.push({
+      scene,
+      timecode_frames: after.start,
+      description: changeTypeDescription("Slipped", frames, direction),
+      delta_frames: 0,
+      confidence: quality,
+      change_type: "Slipped",
+      clip_name: after.name,
+    });
+    return;
+  }
+
   if (headDelta !== 0) {
     const ct: ChangeType = headDelta > 0 ? "AddedToHead" : "RemovedFromHead";
     changes.push({
@@ -463,7 +499,6 @@ function detectTrimChanges(before: Clip, after: Clip, quality: Confidence, chang
     });
   }
 
-  const tailDelta = after.source_out - before.source_out;
   if (tailDelta !== 0) {
     const ct: ChangeType = tailDelta > 0 ? "AddedToTail" : "RemovedFromTail";
     changes.push({
@@ -727,12 +762,92 @@ function detectCameraSwaps(changes: Change[], _beforeClips: Clip[], _afterClips:
   return final;
 }
 
+const DIFFERENT_PART_OVERLAP_THRESHOLD = 5;
+
+function applyDifferentPartPrefix(changes: Change[]): Change[] {
+  return changes.map(c => {
+    if (
+      c._sourceOverlap !== undefined &&
+      c._sourceOverlap < DIFFERENT_PART_OVERLAP_THRESHOLD &&
+      c.change_type !== "Slipped"
+    ) {
+      return { ...c, description: "Using different part of same clip. " + c.description };
+    }
+    return c;
+  });
+}
+
+function detectReorders(changes: Change[], matches: ClipMatch[]): Change[] {
+  if (matches.length < 2) return changes;
+
+  // Build sorted pairs by before_idx
+  const pairs = [...matches].sort((a, b) => a.before_idx - b.before_idx);
+  const afterSeq = pairs.map(p => p.after_idx);
+
+  // Compute LIS to find clips that maintained relative order
+  const lisSet = computeLIS(afterSeq);
+
+  // Build lookup: after_idx → direction for reordered clips
+  const reordered = new Map<number, "earlier" | "later">();
+  for (let i = 0; i < pairs.length; i++) {
+    if (!lisSet.has(i)) {
+      const biRank = i; // position in before-sorted order
+      const aiRank = pairs.filter(p => p.after_idx < pairs[i].after_idx).length;
+      reordered.set(pairs[i].after_idx, aiRank > biRank ? "earlier" : "later");
+    }
+  }
+
+  if (reordered.size === 0) return changes;
+
+  return changes.map(c => {
+    if (c._afterIndex !== undefined && reordered.has(c._afterIndex)) {
+      const dir = reordered.get(c._afterIndex)!;
+      const prefix = dir === "earlier"
+        ? "Shot moved from earlier. "
+        : "Shot moved from later. ";
+      return { ...c, description: prefix + c.description };
+    }
+    return c;
+  });
+}
+
+/** Standard O(n log n) longest increasing subsequence. Returns indices in the LIS. */
+function computeLIS(seq: number[]): Set<number> {
+  if (seq.length === 0) return new Set();
+
+  const n = seq.length;
+  const tails: number[] = [];       // tails[i] = smallest tail value for IS of length i+1
+  const tailIdx: number[] = [];     // index into seq for tails
+  const prev: number[] = new Array(n).fill(-1);
+
+  for (let i = 0; i < n; i++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (tails[mid] < seq[i]) lo = mid + 1;
+      else hi = mid;
+    }
+    tails[lo] = seq[i];
+    tailIdx[lo] = i;
+    prev[i] = lo > 0 ? tailIdx[lo - 1] : -1;
+  }
+
+  // Reconstruct
+  const result = new Set<number>();
+  let idx = tailIdx[tails.length - 1];
+  while (idx >= 0) {
+    result.add(idx);
+    idx = prev[idx];
+  }
+  return result;
+}
+
 export function computeAnalysisStats(changes: Change[]) {
   let trims = 0, shots_added = 0, shots_removed = 0, shots_replaced = 0,
     camera_swaps = 0, edit_shifts = 0, jump_cuts = 0;
   for (const c of changes) {
     switch (c.change_type) {
-      case "RemovedFromHead": case "RemovedFromTail": case "AddedToHead": case "AddedToTail": trims++; break;
+      case "RemovedFromHead": case "RemovedFromTail": case "AddedToHead": case "AddedToTail": case "Slipped": trims++; break;
       case "ShotAdded": shots_added++; break;
       case "ShotRemoved": shots_removed++; break;
       case "ShotReplaced": shots_replaced++; break;

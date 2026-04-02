@@ -385,7 +385,7 @@ function writeClipitemWithSourceMarkers(
   clipId: string, clipName: string, fileId: string, masterclipId: string,
   tlStart: number, tlEnd: number, srcIn: number, srcOut: number,
   duration: number, opacity: number | null,
-  fileDef: { pathurl: string; startTc: number; tcStr: string } | null,
+  fileDef: { pathurl: string; startTc: number; tcStr: string; fileName?: string } | null,
   tl: Timeline,
   sourceMarkers: [number, string][]
 ): string {
@@ -411,7 +411,8 @@ function writeClipitemWithSourceMarkers(
   o += `\t\t\t\t\t\t<anamorphic>FALSE</anamorphic>\n`;
 
   if (fileDef) {
-    o += writeFileDef(fileId, clipName, fileDef.pathurl, duration, fileDef.startTc, fileDef.tcStr, tl);
+    const fName = fileDef.fileName ?? clipName;
+    o += writeFileDef(fileId, fName, fileDef.pathurl, duration, fileDef.startTc, fileDef.tcStr, tl);
   } else {
     o += `\t\t\t\t\t\t<file id="${fileId}"/>\n`;
   }
@@ -514,7 +515,8 @@ function writeAudioClipitemWithFile(
   clipId: string, clipName: string, fileId: string, masterclipId: string,
   tlStart: number, tlEnd: number, srcIn: number, srcOut: number,
   duration: number, sourceTrack: number, tl: Timeline,
-  pathurl: string, startTc: number, tcStr: string
+  pathurl: string, startTc: number, tcStr: string,
+  fileName?: string
 ): string {
   const tpf = ticksPerFrame(tl.timebase, tl.ntsc);
   const ticksIn = srcIn * tpf;
@@ -533,7 +535,7 @@ function writeAudioClipitemWithFile(
   o += `\t\t\t\t\t\t<out>${srcOut}</out>\n`;
   o += `\t\t\t\t\t\t<pproTicksIn>${ticksIn}</pproTicksIn>\n`;
   o += `\t\t\t\t\t\t<pproTicksOut>${ticksOut}</pproTicksOut>\n`;
-  o += writeAudioFileDef(fileId, clipName, pathurl, duration, startTc, tcStr, tl);
+  o += writeAudioFileDef(fileId, fileName ?? clipName, pathurl, duration, startTc, tcStr, tl);
   o += `\t\t\t\t\t\t<sourcetrack>\n`;
   o += `\t\t\t\t\t\t\t<mediatype>audio</mediatype>\n`;
   o += `\t\t\t\t\t\t\t<trackindex>${sourceTrack}</trackindex>\n`;
@@ -590,15 +592,43 @@ function renderConformXml(
   o += `\t\t\t<video>\n`;
   o += writeVideoFormat(after);
 
-  // V1: After ref
+  // Build change description lookup for V1 clip names
+  const changeDescByClip = new Map<string, string>();
+  for (const c of changes) {
+    const delta = framesToDeltaTimecode(c.delta_frames);
+    const key = `${c.clip_name}@${c.timecode_frames}`;
+    changeDescByClip.set(key, `${c.description} | ${delta} | ${c.clip_name}`);
+  }
+
+  // Build after segments from clip boundaries
+  const afterSegments = afterContent.map(c => ({
+    tlStart: c.start,
+    tlEnd: c.end,
+    srcIn: c.start,   // identity mapping for after ref
+    srcOut: c.end,
+    clipName: c.name,
+  }));
+
+  // V1: After ref — segmented at edit points
   o += `\t\t\t\t<track MZ.TrackName="V1 - After REF">\n`;
-  o += writeClipitemWithSourceMarkers(
-    "clipitem-after-1", afterRefName, "file-after", "masterclip-after",
-    afterRefStart, afterRefEnd, afterRefStart, afterRefEnd,
-    config.afterRefDuration, null,
-    { pathurl: config.afterRefPathurl, startTc, tcStr: tcString },
-    after, afterClipMarkers
-  );
+  for (let i = 0; i < afterSegments.length; i++) {
+    const seg = afterSegments[i];
+    const clipId = `clipitem-after-${i + 1}`;
+    // Use change description as clip name if available, otherwise source clip name
+    const changeKey = `${seg.clipName}@${seg.tlStart}`;
+    const displayName = changeDescByClip.get(changeKey) ?? seg.clipName;
+    // Distribute markers to the segment containing them
+    const segMarkers: [number, string][] = afterClipMarkers.filter(
+      ([frame]) => frame >= seg.srcIn && frame < seg.srcOut
+    );
+    o += writeClipitemWithSourceMarkers(
+      clipId, displayName, "file-after", "masterclip-after",
+      seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
+      config.afterRefDuration, null,
+      i === 0 ? { pathurl: config.afterRefPathurl, startTc, tcStr: tcString, fileName: afterRefName } : null,
+      after, segMarkers
+    );
+  }
   o += `\t\t\t\t</track>\n`;
 
   // V2: Before ref segments with opacity
@@ -663,14 +693,29 @@ function renderConformXml(
   o += `\t\t\t\t\t</samplecharacteristics>\n`;
   o += `\t\t\t\t</format>\n`;
 
-  // A1: After ref audio
+  // A1: After ref audio — segmented to match V1
   o += `\t\t\t\t<track MZ.TrackName="A1 - After REF">\n`;
-  o += writeAudioClipitemWithFile(
-    "clipitem-audio-after-1", afterAudioName, "file-after-audio", "masterclip-after-audio",
-    afterRefStart, afterRefEnd, afterRefStart, afterRefEnd,
-    config.afterRefDuration, 1, after,
-    config.afterRefAudioPathurl, startTc, tcString
-  );
+  for (let i = 0; i < afterSegments.length; i++) {
+    const seg = afterSegments[i];
+    const clipId = `clipitem-audio-after-${i + 1}`;
+    const changeKey = `${seg.clipName}@${seg.tlStart}`;
+    const displayName = changeDescByClip.get(changeKey) ?? seg.clipName;
+    if (i === 0) {
+      o += writeAudioClipitemWithFile(
+        clipId, displayName, "file-after-audio", "masterclip-after-audio",
+        seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
+        config.afterRefDuration, 1, after,
+        config.afterRefAudioPathurl, startTc, tcString,
+        afterAudioName
+      );
+    } else {
+      o += writeAudioClipitem(
+        clipId, displayName, "file-after-audio", "masterclip-after-audio",
+        seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
+        config.afterRefDuration, 1, after
+      );
+    }
+  }
   o += `\t\t\t\t</track>\n`;
 
   // A2: Before ref audio segments
