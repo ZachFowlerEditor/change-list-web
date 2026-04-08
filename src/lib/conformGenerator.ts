@@ -249,11 +249,24 @@ function computeConformSegments(
 }
 
 function markerColor(change: Change): string {
-  if (change.change_type === "EditPointShifted") return MARKER_BLUE;
-  if (change.change_type === "CameraSwap") return MARKER_CYAN;
-  if (change.confidence === "High") return MARKER_GREEN;
-  if (change.confidence === "Medium") return MARKER_YELLOW;
-  return MARKER_RED;
+  switch (change.change_type) {
+    // Trims
+    case "RemovedFromHead":
+    case "RemovedFromTail":
+    case "AddedToHead":
+    case "AddedToTail":
+    case "Slipped":
+      return MARKER_YELLOW;
+    // Additions
+    case "ShotAdded":
+      return MARKER_GREEN;
+    // Removals
+    case "ShotRemoved":
+      return MARKER_RED;
+    // Combo / other
+    default:
+      return MARKER_BLUE;
+  }
 }
 
 function buildMarkers(changes: Change[]): SequenceMarker[] {
@@ -592,37 +605,49 @@ function renderConformXml(
   o += `\t\t\t<video>\n`;
   o += writeVideoFormat(after);
 
-  // Build change description lookup for V1 clip names
-  const changeDescByClip = new Map<string, string>();
-  for (const c of changes) {
-    const delta = framesToDeltaTimecode(c.delta_frames);
-    const key = `${c.clip_name}@${c.timecode_frames}`;
-    changeDescByClip.set(key, `${c.description} | ${delta} | ${c.clip_name}`);
-  }
+  // Build after segments, sub-divided at each change's timecode so every
+  // change gets its own clip on the timeline with an annotated name.
+  const afterSegments: { tlStart: number; tlEnd: number; srcIn: number; srcOut: number; clipName: string }[] = [];
+  for (const c of afterContent) {
+    // Collect change timecodes that fall strictly inside this clip (not at boundaries)
+    const cutPoints = changes
+      .filter(ch => ch.timecode_frames > c.start && ch.timecode_frames < c.end)
+      .map(ch => ch.timecode_frames);
+    // Deduplicate and sort
+    const uniqueCuts = [...new Set(cutPoints)].sort((a, b) => a - b);
 
-  // Build after segments from clip boundaries
-  const afterSegments = afterContent.map(c => ({
-    tlStart: c.start,
-    tlEnd: c.end,
-    srcIn: c.start,   // identity mapping for after ref
-    srcOut: c.end,
-    clipName: c.name,
-  }));
+    const boundaries = [c.start, ...uniqueCuts, c.end];
+    for (let k = 0; k < boundaries.length - 1; k++) {
+      const segStart = boundaries[k];
+      const segEnd = boundaries[k + 1];
+      // Find changes at or within this sub-segment
+      const matching = changes.filter(
+        ch => ch.timecode_frames >= segStart && ch.timecode_frames < segEnd
+      );
+      const label = matching.length > 0
+        ? `${c.name} /// ${matching.map(ch => `${ch.description} | ${framesToDeltaTimecode(ch.delta_frames)}`).join(" /// ")}`
+        : c.name;
+      afterSegments.push({
+        tlStart: segStart,
+        tlEnd: segEnd,
+        srcIn: segStart,
+        srcOut: segEnd,
+        clipName: label,
+      });
+    }
+  }
 
   // V1: After ref — segmented at edit points
   o += `\t\t\t\t<track MZ.TrackName="V1 - After REF">\n`;
   for (let i = 0; i < afterSegments.length; i++) {
     const seg = afterSegments[i];
     const clipId = `clipitem-after-${i + 1}`;
-    // Use change description as clip name if available, otherwise source clip name
-    const changeKey = `${seg.clipName}@${seg.tlStart}`;
-    const displayName = changeDescByClip.get(changeKey) ?? seg.clipName;
     // Distribute markers to the segment containing them
     const segMarkers: [number, string][] = afterClipMarkers.filter(
       ([frame]) => frame >= seg.srcIn && frame < seg.srcOut
     );
     o += writeClipitemWithSourceMarkers(
-      clipId, displayName, "file-after", "masterclip-after",
+      clipId, seg.clipName, "file-after", "masterclip-after",
       seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
       config.afterRefDuration, null,
       i === 0 ? { pathurl: config.afterRefPathurl, startTc, tcStr: tcString, fileName: afterRefName } : null,
@@ -698,11 +723,9 @@ function renderConformXml(
   for (let i = 0; i < afterSegments.length; i++) {
     const seg = afterSegments[i];
     const clipId = `clipitem-audio-after-${i + 1}`;
-    const changeKey = `${seg.clipName}@${seg.tlStart}`;
-    const displayName = changeDescByClip.get(changeKey) ?? seg.clipName;
     if (i === 0) {
       o += writeAudioClipitemWithFile(
-        clipId, displayName, "file-after-audio", "masterclip-after-audio",
+        clipId, seg.clipName, "file-after-audio", "masterclip-after-audio",
         seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
         config.afterRefDuration, 1, after,
         config.afterRefAudioPathurl, startTc, tcString,
@@ -710,7 +733,7 @@ function renderConformXml(
       );
     } else {
       o += writeAudioClipitem(
-        clipId, displayName, "file-after-audio", "masterclip-after-audio",
+        clipId, seg.clipName, "file-after-audio", "masterclip-after-audio",
         seg.tlStart, seg.tlEnd, seg.srcIn, seg.srcOut,
         config.afterRefDuration, 1, after
       );

@@ -112,19 +112,19 @@ function parseMarkerComment(
     if (deltaOrClip.startsWith("+") || deltaOrClip.startsWith("-")) {
       return { tc, description, delta: deltaOrClip, clipName: "", scene: "" };
     }
-    return { tc, description, delta: "", clipName: deltaOrClip, scene: sceneFromName(deltaOrClip) };
+    return { tc, description, delta: "00:00:00:00", clipName: deltaOrClip, scene: sceneFromName(deltaOrClip) };
   }
 
-  return { tc, description: comment, delta: "", clipName: "", scene: "" };
+  return { tc, description: comment, delta: "00:00:00:00", clipName: "", scene: "" };
 }
 
 function colorToConfidence(color: string): { confidence: number; confidence_label: string } {
   switch (color) {
-    case "4278255360": return { confidence: 95, confidence_label: "High" };   // Green
-    case "4294967040": return { confidence: 75, confidence_label: "Medium" }; // Yellow
-    case "4294901760": return { confidence: 45, confidence_label: "Low" };    // Red
-    case "4278190335": return { confidence: 95, confidence_label: "High" };   // Blue
-    case "4278255615": return { confidence: 95, confidence_label: "High" };   // Cyan
+    case "4278255360": return { confidence: 75, confidence_label: "Medium" }; // Green  (additions)
+    case "4294967040": return { confidence: 95, confidence_label: "High" };   // Yellow (trims)
+    case "4294901760": return { confidence: 75, confidence_label: "Medium" }; // Red    (removals)
+    case "4278190335": return { confidence: 75, confidence_label: "Medium" }; // Blue   (combo/other)
+    case "4278255615": return { confidence: 75, confidence_label: "Medium" }; // Cyan   (legacy)
     default: return { confidence: 0, confidence_label: "" };
   }
 }

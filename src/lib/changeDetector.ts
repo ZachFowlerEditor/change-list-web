@@ -200,7 +200,12 @@ function mergeConsecutiveSameType(changes: Change[]): Change[] {
       const next = changes[runEnd + 1];
       if (next.change_type !== current.change_type) break;
       if (isShotType) {
-        runEnd++;
+        // Only merge shots that are near each other (within 2 sec at 24fps)
+        if (Math.abs(next.timecode_frames - changes[runEnd].timecode_frames) <= MAX_SOURCE_GAP_FRAMES) {
+          runEnd++;
+        } else {
+          break;
+        }
       } else {
         if (Math.abs(next.timecode_frames - current.timecode_frames) <= 2) {
           runEnd++;
